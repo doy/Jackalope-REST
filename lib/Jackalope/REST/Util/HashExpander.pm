@@ -2,6 +2,8 @@ package Jackalope::REST::Util::HashExpander;
 use Moose;
 use MooseX::NonMoose;
 
+use JSON ();
+
 our $VERSION   = '0.01';
 our $AUTHORITY = 'cpan:STEVAN';
 
@@ -9,7 +11,71 @@ extends 'CGI::Expand';
 
 sub separator { ':' }
 
+# XXX ugh ugh ugh this is so gross, but it seems to work, so...
+around expand_hash => sub {
+    my $orig = shift;
+    my $self = shift;
+    my ($flat) = @_;
+
+    # superclass version only messes with escaping stuff on keys, and we only
+    # care about escaping things on values, so we don't really need to handle
+    # anything special
+    my $hash = $self->$orig($flat);
+
+    $hash = Jackalope::REST::Util::HashExpander::Visitor->new(
+        cb => sub {
+            my ($v, $data) = @_;
+            if ($data eq '$true') {
+                return JSON::true;
+            }
+            elsif ($data eq '$false') {
+                return JSON::false;
+            }
+            else {
+                $data =~ s/\\\$/\$/g;
+                return $data;
+            }
+        },
+    )->visit($hash);
+
+    return $hash;
+};
+
 __PACKAGE__->meta->make_immutable;
+
+no Moose; 1;
+
+# need to only visit hash values, which D::V::Callback doesn't seem to support
+package
+    Jackalope::REST::Util::HashExpander::Visitor;
+use Moose;
+
+extends 'Data::Visitor';
+
+has cb => (
+    traits    => ['Code'],
+    isa       => 'CodeRef',
+    required  => 1,
+    handles   => {
+        cb => 'execute_method',
+    },
+);
+
+around visit_array_entry => sub {
+    my $orig = shift;
+    my $self = shift;
+    my ($value) = @_;
+    return $self->$orig($value) if ref($value);
+    return $self->$orig($self->cb($value));
+};
+
+around visit_hash_value => sub {
+    my $orig = shift;
+    my $self = shift;
+    my ($value) = @_;
+    return $self->$orig($value) if ref($value);
+    return $self->$orig($self->cb($value));
+};
 
 no Moose; 1;
 
